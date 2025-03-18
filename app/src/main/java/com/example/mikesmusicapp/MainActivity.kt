@@ -23,6 +23,19 @@ class MainActivity : ComponentActivity() {
     private lateinit var miniPlayerDuration: TextView
     private lateinit var miniPlayerSeekBar: SeekBar
     private lateinit var miniPlayerThumbnail: ImageView
+    private lateinit var miniPlayerExpandButton: Button
+    private lateinit var fullScreenPlayer: LinearLayout
+    private lateinit var fullScreenMinimizeButton: Button
+    private lateinit var fullScreenTitle: TextView
+    private lateinit var fullScreenCurrentTime: TextView
+    private lateinit var fullScreenDuration: TextView
+    private lateinit var fullScreenSeekBar: SeekBar
+    private lateinit var fullScreenPlayButton: Button
+    private lateinit var fullScreenPauseButton: Button
+    private lateinit var fullScreenNextButton: Button
+    private lateinit var fullScreenPrevButton: Button
+    private lateinit var fullScreenShuffleButton: Button
+    private lateinit var fullScreenLoopButton: Button
     private val handler = Handler(Looper.getMainLooper())
     private val updateSeekBar = object : Runnable {
         override fun run() {
@@ -34,8 +47,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private var isLooping = false
-    private var isShuffling = false
+    private var playbackMode = PlaybackMode.NORMAL // Default mode
+
+    enum class PlaybackMode {
+        NORMAL, SHUFFLE, LOOP
+    }
 
     // Register the folder picker launcher
     private val folderPickerLauncher = registerForActivityResult(
@@ -53,20 +69,27 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Initialize UI components
+        // Initialize views
         val songListView = findViewById<ListView>(R.id.songListView)
-        seekBar = findViewById(R.id.seekBar)
-        val playButton = findViewById<Button>(R.id.playButton)
-        val pauseButton = findViewById<Button>(R.id.pauseButton)
-        val nextButton = findViewById<Button>(R.id.nextButton)
-        val prevButton = findViewById<Button>(R.id.prevButton)
-
-        // Initialize mini-player components
+        seekBar = findViewById(R.id.miniPlayerSeekBar)
         miniPlayer = findViewById(R.id.miniPlayer)
+        fullScreenPlayer = findViewById(R.id.fullScreenPlayer)
         miniPlayerTitle = findViewById(R.id.miniPlayerTitle)
         miniPlayerDuration = findViewById(R.id.miniPlayerDuration)
         miniPlayerSeekBar = findViewById(R.id.miniPlayerSeekBar)
         miniPlayerThumbnail = findViewById(R.id.miniPlayerThumbnail)
+        miniPlayerExpandButton = findViewById(R.id.miniPlayerExpandButton)
+        fullScreenMinimizeButton = findViewById(R.id.fullScreenMinimizeButton)
+        fullScreenTitle = findViewById(R.id.fullScreenTitle)
+        fullScreenCurrentTime = findViewById(R.id.fullScreenCurrentTime)
+        fullScreenDuration = findViewById(R.id.fullScreenDuration)
+        fullScreenSeekBar = findViewById(R.id.fullScreenSeekBar)
+        fullScreenPlayButton = findViewById(R.id.fullScreenPlayButton)
+        fullScreenPauseButton = findViewById(R.id.fullScreenPauseButton)
+        fullScreenNextButton = findViewById(R.id.fullScreenNextButton)
+        fullScreenPrevButton = findViewById(R.id.fullScreenPrevButton)
+        fullScreenShuffleButton = findViewById(R.id.fullScreenShuffleButton)
+        fullScreenLoopButton = findViewById(R.id.fullScreenLoopButton)
 
         // Set up the "Select Folder" button
         val selectFolderButton = findViewById<Button>(R.id.selectFolderButton)
@@ -81,7 +104,26 @@ class MainActivity : ComponentActivity() {
             playSong(songs[position].path)
         }
 
+        // Expand button (mini-player -> full-screen)
+        miniPlayerExpandButton.setOnClickListener {
+            miniPlayer.visibility = View.GONE
+            fullScreenPlayer.visibility = View.VISIBLE
+            updateFullScreenPlayer(songs[currentSongIndex])
+        }
+
+        // Minimize button (full-screen -> mini-player)
+        fullScreenMinimizeButton.setOnClickListener {
+            fullScreenPlayer.visibility = View.GONE
+            miniPlayer.visibility = View.VISIBLE
+            updateMiniPlayer(songs[currentSongIndex])
+        }
+
         // Playback controls
+        val playButton = findViewById<Button>(R.id.miniPlayerPlayButton)
+        val pauseButton = findViewById<Button>(R.id.miniPlayerPauseButton)
+        val nextButton = findViewById<Button>(R.id.miniPlayerNextButton)
+        val prevButton = findViewById<Button>(R.id.miniPlayerPrevButton)
+
         playButton.setOnClickListener {
             mediaPlayer?.start()
             handler.post(updateSeekBar)
@@ -108,8 +150,46 @@ class MainActivity : ComponentActivity() {
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
 
-        // Mini-player seek bar listener
-        miniPlayerSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+        // Initialize shuffle and loop buttons
+        val shuffleButton = findViewById<Button>(R.id.miniPlayerShuffleButton)
+        val loopButton = findViewById<Button>(R.id.miniPlayerLoopButton)
+
+        shuffleButton.setOnClickListener {
+            cyclePlaybackMode()
+        }
+
+        loopButton.setOnClickListener {
+            mediaPlayer?.isLooping = !mediaPlayer!!.isLooping
+            loopButton.text = if (mediaPlayer!!.isLooping) "Loop: On" else "Loop: Off"
+        }
+
+        fullScreenPlayButton.setOnClickListener {
+            mediaPlayer?.start()
+            handler.post(updateFullScreenSeekBar)
+        }
+
+        fullScreenPauseButton.setOnClickListener {
+            mediaPlayer?.pause()
+        }
+
+        fullScreenNextButton.setOnClickListener {
+            playNextSong()
+        }
+
+        fullScreenPrevButton.setOnClickListener {
+            playPreviousSong()
+        }
+
+        fullScreenShuffleButton.setOnClickListener {
+            cyclePlaybackMode()
+        }
+
+        fullScreenLoopButton.setOnClickListener {
+            mediaPlayer?.isLooping = !mediaPlayer!!.isLooping
+            fullScreenLoopButton.text = if (mediaPlayer!!.isLooping) "Loop: On" else "Loop: Off"
+        }
+
+        fullScreenSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
                     mediaPlayer?.seekTo(progress)
@@ -119,44 +199,6 @@ class MainActivity : ComponentActivity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
-
-        // Initialize shuffle and loop buttons
-        val shuffleButton = findViewById<Button>(R.id.miniPlayerShuffleButton)
-        val loopButton = findViewById<Button>(R.id.miniPlayerLoopButton)
-
-        shuffleButton.setOnClickListener {
-            isShuffling = !isShuffling
-            shuffleButton.text = if (isShuffling) "Shuffle: On" else "Shuffle: Off"
-        }
-
-        loopButton.setOnClickListener {
-            isLooping = !isLooping
-            mediaPlayer?.isLooping = isLooping
-            loopButton.text = if (isLooping) "Loop: On" else "Loop: Off"
-        }
-
-        // Initialize mini-player buttons
-        val miniPlayerPlayButton = findViewById<Button>(R.id.miniPlayerPlayButton)
-        val miniPlayerPauseButton = findViewById<Button>(R.id.miniPlayerPauseButton)
-        val miniPlayerNextButton = findViewById<Button>(R.id.miniPlayerNextButton)
-        val miniPlayerPrevButton = findViewById<Button>(R.id.miniPlayerPrevButton)
-
-        // Mini-player play/pause buttons
-        miniPlayerPlayButton.setOnClickListener {
-            mediaPlayer?.start()
-            handler.post(updateSeekBar)
-        }
-        miniPlayerPauseButton.setOnClickListener {
-            mediaPlayer?.pause()
-        }
-
-        // Mini-player next/previous buttons
-        miniPlayerNextButton.setOnClickListener {
-            playNextSong()
-        }
-        miniPlayerPrevButton.setOnClickListener {
-            playPreviousSong()
-        }
     }
 
     private fun takePersistableUriPermission(uri: Uri) {
@@ -199,46 +241,67 @@ class MainActivity : ComponentActivity() {
             prepare()
             start()
             setOnCompletionListener {
-                if (isLooping) {
-                    playSong(songs[currentSongIndex].path) // Loop the same song
-                } else {
-                    playNextSong() // Play the next song
+                when (playbackMode) {
+                    PlaybackMode.NORMAL -> playNextSong()
+                    PlaybackMode.SHUFFLE -> playRandomSong()
+                    PlaybackMode.LOOP -> playSong(songs[currentSongIndex].path)
                 }
             }
         }
         seekBar.max = mediaPlayer!!.duration
         miniPlayerSeekBar.max = mediaPlayer!!.duration
+        fullScreenSeekBar.max = mediaPlayer!!.duration
         handler.post(updateSeekBar)
+        handler.post(updateFullScreenSeekBar)
         showMiniPlayer(songs[currentSongIndex].title)
         updateMiniPlayer(songs[currentSongIndex])
+        updateFullScreenPlayer(songs[currentSongIndex])
     }
 
     private fun playNextSong() {
-        if (isShuffling) {
-            currentSongIndex = (0 until songs.size).random() // Play a random song
-        } else if (currentSongIndex < songs.size - 1) {
+        if (currentSongIndex < songs.size - 1) {
             currentSongIndex++
-        } else {
-            currentSongIndex = 0 // Loop back to the first song
+            playSong(songs[currentSongIndex].path)
         }
-        playSong(songs[currentSongIndex].path)
     }
 
     private fun playPreviousSong() {
-        if (isShuffling) {
-            currentSongIndex = (0 until songs.size).random() // Play a random song
-        } else if (currentSongIndex > 0) {
+        if (currentSongIndex > 0) {
             currentSongIndex--
-        } else {
-            currentSongIndex = songs.size - 1 // Loop back to the last song
+            playSong(songs[currentSongIndex].path)
         }
+    }
+
+    private fun playRandomSong() {
+        currentSongIndex = (0 until songs.size).random()
         playSong(songs[currentSongIndex].path)
+    }
+
+    private fun cyclePlaybackMode() {
+        playbackMode = when (playbackMode) {
+            PlaybackMode.NORMAL -> PlaybackMode.SHUFFLE
+            PlaybackMode.SHUFFLE -> PlaybackMode.LOOP
+            PlaybackMode.LOOP -> PlaybackMode.NORMAL
+        }
+        updateModeButtonText()
+    }
+
+    private fun updateModeButtonText() {
+        val modeButton = findViewById<Button>(R.id.miniPlayerShuffleButton)
+        val fullScreenModeButton = findViewById<Button>(R.id.fullScreenShuffleButton)
+        modeButton.text = when (playbackMode) {
+            PlaybackMode.NORMAL -> "Normal"
+            PlaybackMode.SHUFFLE -> "Shuffle"
+            PlaybackMode.LOOP -> "Loop"
+        }
+        fullScreenModeButton.text = modeButton.text
     }
 
     override fun onDestroy() {
         super.onDestroy()
         mediaPlayer?.release()
         handler.removeCallbacks(updateSeekBar)
+        handler.removeCallbacks(updateFullScreenSeekBar)
     }
 
     private fun isAudioFile(fileName: String?): Boolean {
@@ -261,6 +324,28 @@ class MainActivity : ComponentActivity() {
         miniPlayerDuration.text = formatDuration(mediaPlayer?.duration ?: 0)
         miniPlayerSeekBar.max = mediaPlayer?.duration ?: 0
     }
+
+    private fun updateFullScreenPlayer(song: Song) {
+        fullScreenTitle.text = song.title
+        fullScreenDuration.text = formatDuration(mediaPlayer?.duration ?: 0)
+        fullScreenSeekBar.max = mediaPlayer?.duration ?: 0
+        fullScreenSeekBar.progress = mediaPlayer?.currentPosition ?: 0
+
+        // Update the current time periodically
+        handler.post(updateFullScreenSeekBar)
+    }
+
+    private val updateFullScreenSeekBar = object : Runnable {
+        override fun run() {
+            mediaPlayer?.let {
+                fullScreenSeekBar.progress = it.currentPosition
+                fullScreenCurrentTime.text = formatDuration(it.currentPosition)
+                handler.postDelayed(this, 1000) // Update every second
+            }
+        }
+    }
+
+
 
     private fun formatDuration(duration: Int): String {
         val minutes = duration / 1000 / 60
