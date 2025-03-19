@@ -1,4 +1,4 @@
-package com.example.mikesmusicapp
+package com.example.mikesmusicapp.ui.theme
 
 import android.content.Intent
 import android.media.MediaPlayer
@@ -11,11 +11,22 @@ import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.documentfile.provider.DocumentFile
+import androidx.lifecycle.lifecycleScope
+import com.example.mikesmusicapp.R
+import com.example.mikesmusicapp.data.AppDatabase
+import com.example.mikesmusicapp.data.Song
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
+    private val database by lazy { AppDatabase.getDatabase(this) }
+    private val songDao by lazy { database.songDao() }
+
     private var mediaPlayer: MediaPlayer? = null
     private var currentSongIndex: Int = -1
+    private var isPlaying: Boolean = false
     private val songs = mutableListOf<Song>()
     private lateinit var seekBar: SeekBar
     private lateinit var miniPlayer: LinearLayout
@@ -60,8 +71,12 @@ class MainActivity : ComponentActivity() {
         if (uri != null) {
             // Take persistable URI permissions
             takePersistableUriPermission(uri)
-            // Scan the folder for songs
-            scanFolderForSongs(uri)
+            // Save the folder URI to SharedPreferences
+            saveFolderUri(uri.toString())
+            // Scan the folder for songs and insert them into the database
+            lifecycleScope.launch {
+                scanFolderForSongs(uri)
+            }
         }
     }
 
@@ -84,18 +99,34 @@ class MainActivity : ComponentActivity() {
         fullScreenCurrentTime = findViewById(R.id.fullScreenCurrentTime)
         fullScreenDuration = findViewById(R.id.fullScreenDuration)
         fullScreenSeekBar = findViewById(R.id.fullScreenSeekBar)
-        fullScreenPlayButton = findViewById(R.id.fullScreenPlayButton)
-        fullScreenPauseButton = findViewById(R.id.fullScreenPauseButton)
         fullScreenNextButton = findViewById(R.id.fullScreenNextButton)
         fullScreenPrevButton = findViewById(R.id.fullScreenPrevButton)
         fullScreenShuffleButton = findViewById(R.id.fullScreenShuffleButton)
         fullScreenLoopButton = findViewById(R.id.fullScreenLoopButton)
+
+        // Load the last opened folder URI
+        val lastFolderUri = loadFolderUri()
+        if (lastFolderUri != null) {
+            val uri = Uri.parse(lastFolderUri)
+            takePersistableUriPermission(uri)
+            lifecycleScope.launch {
+                songs.addAll(loadSongs()) // Load songs from the database
+                observeSongs() // Start observing changes
+            }
+        }
 
         // Set up the "Select Folder" button
         val selectFolderButton = findViewById<Button>(R.id.selectFolderButton)
         selectFolderButton.setOnClickListener {
             // Launch the folder picker
             folderPickerLauncher.launch(null)
+        }
+
+        val shuffleFolderButton = findViewById<Button>(R.id.shuffleFolderButton)
+        shuffleFolderButton.setOnClickListener {
+            playbackMode = PlaybackMode.SHUFFLE // Set playback mode to SHUFFLE
+            playRandomSong() // Play a random song
+            updateModeButtonText() // Update the mode button text
         }
 
         // Handle song clicks
@@ -119,18 +150,14 @@ class MainActivity : ComponentActivity() {
         }
 
         // Playback controls
-        val playButton = findViewById<Button>(R.id.miniPlayerPlayButton)
-        val pauseButton = findViewById<Button>(R.id.miniPlayerPauseButton)
+        val miniPlayerPlayPauseButton = findViewById<Button>(R.id.miniPlayerPlayPauseButton)
         val nextButton = findViewById<Button>(R.id.miniPlayerNextButton)
         val prevButton = findViewById<Button>(R.id.miniPlayerPrevButton)
 
-        playButton.setOnClickListener {
-            mediaPlayer?.start()
-            handler.post(updateSeekBar)
+        miniPlayerPlayPauseButton.setOnClickListener {
+            togglePlayPause()
         }
-        pauseButton.setOnClickListener {
-            mediaPlayer?.pause()
-        }
+
         nextButton.setOnClickListener {
             playNextSong()
         }
@@ -152,6 +179,11 @@ class MainActivity : ComponentActivity() {
 
         // Initialize shuffle and loop buttons
         val shuffleButton = findViewById<Button>(R.id.miniPlayerShuffleButton)
+        shuffleButton.setOnClickListener {
+            playbackMode = PlaybackMode.SHUFFLE
+            playRandomSong()
+        }
+
         val loopButton = findViewById<Button>(R.id.miniPlayerLoopButton)
 
         shuffleButton.setOnClickListener {
@@ -163,13 +195,9 @@ class MainActivity : ComponentActivity() {
             loopButton.text = if (mediaPlayer!!.isLooping) "Loop: On" else "Loop: Off"
         }
 
-        fullScreenPlayButton.setOnClickListener {
-            mediaPlayer?.start()
-            handler.post(updateFullScreenSeekBar)
-        }
-
-        fullScreenPauseButton.setOnClickListener {
-            mediaPlayer?.pause()
+        val fullScreenPlayPauseButton = findViewById<Button>(R.id.fullScreenPlayPauseButton)
+        fullScreenPlayPauseButton.setOnClickListener {
+            togglePlayPause()
         }
 
         fullScreenNextButton.setOnClickListener {
@@ -208,29 +236,78 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun scanFolderForSongs(folderUri: Uri) {
+    private fun saveFolderUri(uri: String) {
+        val sharedPreferences = getSharedPreferences("MusicAppPrefs", MODE_PRIVATE)
+        val editor = sharedPreferences.edit()
+        editor.putString("lastFolderUri", uri)
+        editor.apply()
+    }
+
+    private fun loadFolderUri(): String? {
+        val sharedPreferences = getSharedPreferences("MusicAppPrefs", MODE_PRIVATE)
+        return sharedPreferences.getString("lastFolderUri", null)
+    }
+
+    private suspend fun scanFolderForSongs(folderUri: Uri) {
         val documentFile = DocumentFile.fromTreeUri(this, folderUri)
 
         if (documentFile != null && documentFile.isDirectory) {
-            // Clear the existing songs list
-            songs.clear()
-
-            // List all files in the folder
+            val songs = mutableListOf<Song>()
             for (file in documentFile.listFiles()) {
                 if (file.isFile && isAudioFile(file.name)) {
-                    // Add the file to the songs list
-                    songs.add(Song(file.name ?: "Unknown", "Unknown", file.uri.toString()))
+                    // Create a Song object for each audio file
+                    val song = Song(
+                        title = file.name ?: "Unknown",
+                        artist = "Unknown", // You can extract metadata (e.g., artist) later
+                        path = file.uri.toString()
+                    )
+                    songs.add(song)
                 }
             }
 
-            if (songs.isEmpty()) {
-                Toast.makeText(this, "No audio files found in the selected folder.", Toast.LENGTH_SHORT).show()
+            if (songs.isNotEmpty()) {
+                // Insert all songs into the database
+                songDao.insertAll(songs)
             }
+        }
+    }
 
-            // Display songs in the ListView
-            val songListView = findViewById<ListView>(R.id.songListView)
-            val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, songs.map { it.title })
-            songListView.adapter = adapter
+    private suspend fun loadSongs(): List<Song> {
+        return songDao.getAllSongs().first()
+    }
+
+    private fun observeSongs() {
+        lifecycleScope.launch {
+            songDao.getAllSongs().collect { songs ->
+                // Update the ListView with the new list of songs
+                val songListView = findViewById<ListView>(R.id.songListView)
+                val adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, songs.map { it.title })
+                songListView.adapter = adapter
+            }
+        }
+    }
+
+    private fun togglePlayPause() {
+        if (isPlaying) {
+            mediaPlayer?.pause()
+            isPlaying = false
+        } else {
+            mediaPlayer?.start()
+            isPlaying = true
+        }
+        updatePlayPauseButtonText()
+    }
+
+    private fun updatePlayPauseButtonText() {
+        val miniPlayerPlayPauseButton = findViewById<Button>(R.id.miniPlayerPlayPauseButton)
+        val fullScreenPlayPauseButton = findViewById<Button>(R.id.fullScreenPlayPauseButton)
+
+        if (isPlaying) {
+            miniPlayerPlayPauseButton.text = "Pause"
+            fullScreenPlayPauseButton.text = "Pause"
+        } else {
+            miniPlayerPlayPauseButton.text = "Play"
+            fullScreenPlayPauseButton.text = "Play"
         }
     }
 
@@ -240,6 +317,8 @@ class MainActivity : ComponentActivity() {
             setDataSource(this@MainActivity, Uri.parse(path))
             prepare()
             start()
+            updatePlayPauseButtonText()
+
             setOnCompletionListener {
                 when (playbackMode) {
                     PlaybackMode.NORMAL -> playNextSong()
@@ -259,9 +338,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun playNextSong() {
-        if (currentSongIndex < songs.size - 1) {
-            currentSongIndex++
-            playSong(songs[currentSongIndex].path)
+        when (playbackMode) {
+            PlaybackMode.NORMAL -> {
+                if (currentSongIndex < songs.size - 1) {
+                    currentSongIndex++
+                    playSong(songs[currentSongIndex].path)
+                }
+            }
+            PlaybackMode.SHUFFLE -> {
+                playRandomSong()
+            }
+            PlaybackMode.LOOP -> {
+                playSong(songs[currentSongIndex].path)
+            }
         }
     }
 
@@ -273,8 +362,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun playRandomSong() {
-        currentSongIndex = (0 until songs.size).random()
-        playSong(songs[currentSongIndex].path)
+        if (songs.isNotEmpty()) {
+            currentSongIndex = (0 until songs.size).random()
+            playSong(songs[currentSongIndex].path)
+        }
     }
 
     private fun cyclePlaybackMode() {
@@ -296,6 +387,7 @@ class MainActivity : ComponentActivity() {
         }
         fullScreenModeButton.text = modeButton.text
     }
+
 
     override fun onDestroy() {
         super.onDestroy()
@@ -345,13 +437,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-
-
     private fun formatDuration(duration: Int): String {
         val minutes = duration / 1000 / 60
         val seconds = duration / 1000 % 60
         return String.format("%02d:%02d", minutes, seconds)
     }
-
-    data class Song(val title: String, val artist: String, val path: String)
 }

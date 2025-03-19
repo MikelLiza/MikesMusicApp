@@ -11,6 +11,14 @@
 
         <!-- List of Songs -->
         <Button
+            android:id="@+id/shuffleFolderButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Shuffle"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="16dp" />
+
+        <Button
             android:id="@+id/selectFolderButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

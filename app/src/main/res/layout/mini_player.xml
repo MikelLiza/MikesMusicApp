@@ -81,16 +81,10 @@
             android:text="Prev" />
 
         <Button
-            android:id="@+id/miniPlayerPlayButton"
+            android:id="@+id/miniPlayerPlayPauseButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Play" />
-
-        <Button
-            android:id="@+id/miniPlayerPauseButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Pause" />
 
         <Button
             android:id="@+id/miniPlayerNextButton"
