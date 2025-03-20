@@ -54,6 +54,7 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     ksp("androidx.room:room-compiler:2.6.1")
     implementation(libs.androidx.room.ktx)
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

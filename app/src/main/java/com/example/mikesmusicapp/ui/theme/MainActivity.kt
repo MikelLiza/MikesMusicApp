@@ -227,6 +227,45 @@ class MainActivity : ComponentActivity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
+
+        if (savedInstanceState != null) {
+            currentSongIndex = savedInstanceState.getInt("currentSongIndex", -1)
+            val currentPosition = savedInstanceState.getInt("currentPosition", 0)
+            isPlaying = savedInstanceState.getBoolean("isPlaying", false)
+
+            if (currentSongIndex != -1) {
+                playSong(songs[currentSongIndex].path)
+                mediaPlayer?.seekTo(currentPosition)
+                if (isPlaying) {
+                    mediaPlayer?.start()
+                }
+                updatePlayPauseButtonText()
+            }
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        // Save the current song index, playback position, and playback state
+        outState.putInt("currentSongIndex", currentSongIndex)
+        outState.putInt("currentPosition", mediaPlayer?.currentPosition ?: 0)
+        outState.putBoolean("isPlaying", isPlaying)
+    }
+
+    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
+        super.onRestoreInstanceState(savedInstanceState)
+        currentSongIndex = savedInstanceState.getInt("currentSongIndex", -1)
+        val currentPosition = savedInstanceState.getInt("currentPosition", 0)
+        isPlaying = savedInstanceState.getBoolean("isPlaying", false)
+
+        if (currentSongIndex != -1) {
+            playSong(songs[currentSongIndex].path)
+            mediaPlayer?.seekTo(currentPosition)
+            if (isPlaying) {
+                mediaPlayer?.start()
+            }
+            updatePlayPauseButtonText()
+        }
     }
 
     private fun takePersistableUriPermission(uri: Uri) {
@@ -317,6 +356,7 @@ class MainActivity : ComponentActivity() {
             setDataSource(this@MainActivity, Uri.parse(path))
             prepare()
             start()
+            this@MainActivity.isPlaying = true
             updatePlayPauseButtonText()
 
             setOnCompletionListener {
