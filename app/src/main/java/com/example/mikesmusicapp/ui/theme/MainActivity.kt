@@ -367,6 +367,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        val miniPlayerTitle = findViewById<TextView>(R.id.miniPlayerTitle)
+        miniPlayerTitle.isSelected = true
         seekBar.max = mediaPlayer!!.duration
         miniPlayerSeekBar.max = mediaPlayer!!.duration
         fullScreenSeekBar.max = mediaPlayer!!.duration
