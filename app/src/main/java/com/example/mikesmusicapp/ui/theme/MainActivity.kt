@@ -1,5 +1,6 @@
 package com.example.mikesmusicapp.ui.theme
 
+import android.content.Context
 import android.content.Intent
 import android.media.MediaPlayer
 import android.net.Uri
@@ -18,6 +19,7 @@ import com.example.mikesmusicapp.data.Song
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.util.Stack
 
 class MainActivity : ComponentActivity() {
 
@@ -28,6 +30,9 @@ class MainActivity : ComponentActivity() {
     private var currentSongIndex: Int = -1
     private var isPlaying: Boolean = false
     private val songs = mutableListOf<Song>()
+    private val playbackHistory = Stack<Int>()
+    private var currentShuffleOrder = mutableListOf<Int>()
+    private var currentShuffleIndex = 0
     private lateinit var seekBar: SeekBar
     private lateinit var miniPlayer: LinearLayout
     private lateinit var miniPlayerTitle: TextView
@@ -64,6 +69,12 @@ class MainActivity : ComponentActivity() {
         NORMAL, SHUFFLE, LOOP
     }
 
+    companion object {
+        private const val PREFS_NAME = "PlayerPrefs"
+        private const val KEY_LAST_SONG_INDEX = "last_song_index"
+        private const val KEY_IS_PLAYING = "is_playing"
+    }
+
     // Register the folder picker launcher
     private val folderPickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -78,6 +89,10 @@ class MainActivity : ComponentActivity() {
                 scanFolderForSongs(uri)
             }
         }
+    }
+
+    private val sharedPrefs by lazy {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -115,6 +130,25 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        val lastSongIndex = sharedPrefs.getInt(KEY_LAST_SONG_INDEX, -1)
+        val wasPlaying = sharedPrefs.getBoolean(KEY_IS_PLAYING, false)
+
+        if (lastSongIndex != -1 && songs.isNotEmpty()) {
+            currentSongIndex = lastSongIndex
+            if (wasPlaying) {
+                playSong(songs[currentSongIndex].path)
+            } else {
+                // Just prepare the player but don't start
+                preparePlayer(songs[currentSongIndex].path)
+                updateMiniPlayer(songs[currentSongIndex])
+            }
+        } else {
+            // No previous song, hide mini-player
+            hideMiniPlayer()
+        }
+
+
+
         // Set up the "Select Folder" button
         val selectFolderButton = findViewById<Button>(R.id.selectFolderButton)
         selectFolderButton.setOnClickListener {
@@ -129,6 +163,9 @@ class MainActivity : ComponentActivity() {
             updateModeButtonText() // Update the mode button text
         }
 
+        songListView.scrollBarStyle = View.SCROLLBARS_OUTSIDE_OVERLAY
+        songListView.isVerticalScrollBarEnabled = true
+
         // Handle song clicks
         songListView.setOnItemClickListener { _, _, position, _ ->
             currentSongIndex = position
@@ -137,9 +174,13 @@ class MainActivity : ComponentActivity() {
 
         // Expand button (mini-player -> full-screen)
         miniPlayerExpandButton.setOnClickListener {
-            miniPlayer.visibility = View.GONE
-            fullScreenPlayer.visibility = View.VISIBLE
-            updateFullScreenPlayer(songs[currentSongIndex])
+            if (currentSongIndex != -1) {
+                miniPlayer.visibility = View.GONE
+                fullScreenPlayer.visibility = View.VISIBLE
+                updateFullScreenPlayer(songs[currentSongIndex])
+            } else {
+                Toast.makeText(this, "No song selected", Toast.LENGTH_SHORT).show()
+            }
         }
 
         // Minimize button (full-screen -> mini-player)
@@ -446,12 +487,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showMiniPlayer(title: String) {
-        miniPlayerTitle.text = title
-        miniPlayer.visibility = View.VISIBLE
+        if (currentSongIndex != -1) {
+            miniPlayerTitle.text = title
+            miniPlayer.visibility = View.VISIBLE
+        }
     }
 
     private fun hideMiniPlayer() {
         miniPlayer.visibility = View.GONE
+        fullScreenPlayer.visibility = View.GONE
     }
 
     private fun updateMiniPlayer(song: Song) {
@@ -480,9 +524,49 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun preparePlayer(path: String) {
+        mediaPlayer?.release()
+        mediaPlayer = MediaPlayer().apply {
+            setDataSource(this@MainActivity, Uri.parse(path))
+            prepareAsync()
+            setOnPreparedListener {
+                seekTo(0) // Reset to beginning
+                updateMiniPlayer(songs[currentSongIndex])
+            }
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Save current state
+        sharedPrefs.edit().apply {
+            putInt(KEY_LAST_SONG_INDEX, currentSongIndex)
+            putBoolean(KEY_IS_PLAYING, isPlaying)
+            apply()
+        }
+    }
+
     private fun formatDuration(duration: Int): String {
         val minutes = duration / 1000 / 60
         val seconds = duration / 1000 % 60
         return String.format("%02d:%02d", minutes, seconds)
+    }
+
+    fun shuffleSongs() {
+        // 1. Save current song to history if playing
+        if (currentSongIndex != -1) {
+            playbackHistory.push(currentSongIndex)
+        }
+
+        // 2. Generate new shuffle order
+        currentShuffleOrder = songs.indices.toMutableList().apply {
+            remove(currentSongIndex) // Remove current song if exists
+            shuffle()
+            if (currentSongIndex != -1) add(0, currentSongIndex) // Keep current song first
+        }
+
+        // 3. Start playback
+        currentShuffleIndex = 0
+        playSong(songs[currentShuffleOrder[0]].path)
     }
 }

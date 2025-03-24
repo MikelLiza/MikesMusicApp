@@ -1,22 +1,22 @@
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-    <!-- Main Content (ListView, etc.) -->
+    <!-- Header Buttons -->
     <LinearLayout
+        android:id="@+id/headerButtons"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:paddingHorizontal="16dp">
 
-        <!-- List of Songs -->
         <Button
             android:id="@+id/shuffleFolderButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Shuffle"
             android:layout_gravity="center_horizontal"
-            android:layout_marginTop="16dp" />
+            android:text="Shuffle" />
 
         <Button
             android:id="@+id/selectFolderButton"
@@ -25,26 +25,33 @@
             android:layout_gravity="center_horizontal"
             android:layout_marginTop="16dp"
             android:text="Select Folder" />
-
-        <ListView
-            android:id="@+id/songListView"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:paddingBottom="176dp"
-            android:clipToPadding="false"
-            android:layout_above="@id/miniPlayer"
-            android:divider="@android:color/darker_gray"
-            android:dividerHeight="1dp" />
-
-        <!-- Select Folder Button -->
     </LinearLayout>
 
-    <!-- Mini-Player -->
-    <include layout="@layout/mini_player" />
+    <!-- ListView (fills space between header and mini player) -->
+    <ListView
+        android:id="@+id/songListView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@id/headerButtons"
+        android:layout_above="@id/miniPlayer"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:divider="@android:color/darker_gray"
+        android:dividerHeight="1dp"
+        android:scrollbars="vertical"
+        android:fadeScrollbars="false"
+        android:fastScrollEnabled="true"/>
 
-    <!-- Full-Screen Player (Initially Hidden) -->
+    <!-- Mini-Player (fixed height at bottom) -->
+    <include
+        android:id="@+id/miniPlayer"
+        layout="@layout/mini_player"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:layout_alignParentBottom="true"/>
+
+    <!-- Full-Screen Player (hidden by default) -->
     <include
         layout="@layout/full_screen_player"
-        android:visibility="gone" />
-</FrameLayout>
+        android:visibility="gone"/>
+</RelativeLayout>
