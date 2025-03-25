@@ -1,9 +1,12 @@
 package com.example.mikesmusicapp.ui.theme
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -11,11 +14,18 @@ import android.view.View
 import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaSession
 import com.example.mikesmusicapp.R
 import com.example.mikesmusicapp.data.AppDatabase
 import com.example.mikesmusicapp.data.Song
+import com.example.mikesmusicapp.services.MusicService
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -28,11 +38,14 @@ class MainActivity : ComponentActivity() {
 
     private var mediaPlayer: MediaPlayer? = null
     private var currentSongIndex: Int = -1
-    private var isPlaying: Boolean = false
+    var isPlaying: Boolean = false
     private val songs = mutableListOf<Song>()
-    private val playbackHistory = Stack<Int>()
+    private val shuffleHistory = Stack<Int>()
+    private val shuffleFuture = Stack<Int>()
     private var currentShuffleOrder = mutableListOf<Int>()
-    private var currentShuffleIndex = 0
+    private var isShuffleActive = false
+    private var exoPlayer: ExoPlayer? = null
+    private var mediaSession: MediaSession? = null
     private lateinit var seekBar: SeekBar
     private lateinit var miniPlayer: LinearLayout
     private lateinit var miniPlayerTitle: TextView
@@ -52,16 +65,21 @@ class MainActivity : ComponentActivity() {
     private lateinit var fullScreenPrevButton: Button
     private lateinit var fullScreenShuffleButton: Button
     private lateinit var fullScreenLoopButton: Button
+
     private val handler = Handler(Looper.getMainLooper())
     private val updateSeekBar = object : Runnable {
         override fun run() {
-            mediaPlayer?.let {
-                seekBar.progress = it.currentPosition
-                miniPlayerSeekBar.progress = it.currentPosition
-                handler.postDelayed(this, 1000) // Update every second
+            exoPlayer?.let {
+                val position = it.currentPosition.toInt()
+                seekBar.progress = position
+                miniPlayerSeekBar.progress = position
+                fullScreenSeekBar.progress = position
+                fullScreenCurrentTime.text = formatDuration(position)
+                handler.postDelayed(this, 1000)
             }
         }
     }
+
 
     private var playbackMode = PlaybackMode.NORMAL // Default mode
 
@@ -70,6 +88,13 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+
+        @Volatile
+        private var _instance: MainActivity? = null
+
+        val instance: MainActivity?
+            get() = _instance
+
         private const val PREFS_NAME = "PlayerPrefs"
         private const val KEY_LAST_SONG_INDEX = "last_song_index"
         private const val KEY_IS_PLAYING = "is_playing"
@@ -96,6 +121,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        _instance = this
+
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
@@ -158,9 +185,14 @@ class MainActivity : ComponentActivity() {
 
         val shuffleFolderButton = findViewById<Button>(R.id.shuffleFolderButton)
         shuffleFolderButton.setOnClickListener {
-            playbackMode = PlaybackMode.SHUFFLE // Set playback mode to SHUFFLE
-            playRandomSong() // Play a random song
-            updateModeButtonText() // Update the mode button text
+            if (playbackMode != PlaybackMode.SHUFFLE) {
+                // Initialize shuffle mode but don't automatically play
+                initializeShuffleMode()
+                updateModeButtonText()
+            } else {
+                // If already in shuffle mode, just play a new random song
+                playRandomSong()
+            }
         }
 
         songListView.scrollBarStyle = View.SCROLLBARS_OUTSIDE_OVERLAY
@@ -367,15 +399,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun togglePlayPause() {
-        if (isPlaying) {
-            mediaPlayer?.pause()
-            isPlaying = false
-        } else {
-            mediaPlayer?.start()
-            isPlaying = true
+    fun togglePlayPause() {
+        exoPlayer?.let {
+            if (it.isPlaying) {
+                it.pause()
+                isPlaying = false
+            } else {
+                it.play()
+                isPlaying = true
+            }
+            updatePlayPauseButtonText()
+            (getSystemService(MusicService::class.java) as? MusicService)?.updatePlayer(it)
         }
-        updatePlayPauseButtonText()
     }
 
     private fun updatePlayPauseButtonText() {
@@ -392,36 +427,83 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun playSong(path: String) {
-        mediaPlayer?.release()
-        mediaPlayer = MediaPlayer().apply {
-            setDataSource(this@MainActivity, Uri.parse(path))
-            prepare()
-            start()
-            this@MainActivity.isPlaying = true
-            updatePlayPauseButtonText()
-
-            setOnCompletionListener {
-                when (playbackMode) {
-                    PlaybackMode.NORMAL -> playNextSong()
-                    PlaybackMode.SHUFFLE -> playRandomSong()
-                    PlaybackMode.LOOP -> playSong(songs[currentSongIndex].path)
-                }
-            }
+        if (playbackMode == PlaybackMode.SHUFFLE && !isShuffleActive) {
+            shuffleSongs()
+            return
         }
 
-        val miniPlayerTitle = findViewById<TextView>(R.id.miniPlayerTitle)
-        miniPlayerTitle.isSelected = true
-        seekBar.max = mediaPlayer!!.duration
-        miniPlayerSeekBar.max = mediaPlayer!!.duration
-        fullScreenSeekBar.max = mediaPlayer!!.duration
-        handler.post(updateSeekBar)
-        handler.post(updateFullScreenSeekBar)
-        showMiniPlayer(songs[currentSongIndex].title)
-        updateMiniPlayer(songs[currentSongIndex])
-        updateFullScreenPlayer(songs[currentSongIndex])
+        // Start the service first
+        val serviceIntent = Intent(this, MusicService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+
+        // Release previous player
+        exoPlayer?.release()
+
+        // Create new player
+        exoPlayer = ExoPlayer.Builder(this).build().apply {
+            setMediaItem(MediaItem.fromUri(Uri.parse(path)))
+            prepare()
+            play()
+            this@MainActivity.isPlaying = true
+
+            addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) {
+                    when (state) {
+                        Player.STATE_ENDED -> handlePlaybackEnded()
+                        Player.STATE_READY -> updatePlayerUI()
+                    }
+                }
+            })
+        }
+
+        // Update service with new player
+        val service = getSystemService(MusicService::class.java) as? MusicService
+        if (service == null) {
+            // Service not running, start it again
+            startService(Intent(this, MusicService::class.java))
+        } else {
+            service.updatePlayer(exoPlayer!!)
+        }
+
+        updatePlayerUI()
     }
 
-    private fun playNextSong() {
+    private fun handlePlaybackEnded() {
+        when (playbackMode) {
+            PlaybackMode.NORMAL -> playNextSong()
+            PlaybackMode.SHUFFLE -> if (isShuffleActive) playNextSong() else playRandomSong()
+            PlaybackMode.LOOP -> playSong(songs[currentSongIndex].path)
+        }
+    }
+
+    private fun updatePlayerUI() {
+        if (currentSongIndex == -1) return
+
+        val currentSong = songs[currentSongIndex]
+        miniPlayerTitle.text = currentSong.title
+        miniPlayerTitle.isSelected = true
+
+        // Setup seekbar updates
+        exoPlayer?.let { player ->
+            seekBar.max = player.duration.toInt()
+            miniPlayerSeekBar.max = player.duration.toInt()
+            fullScreenSeekBar.max = player.duration.toInt()
+
+            handler.removeCallbacks(updateSeekBar)
+            handler.post(updateSeekBar)
+        }
+
+        showMiniPlayer(currentSong.title)
+        updateMiniPlayer(currentSong)
+        updateFullScreenPlayer(currentSong)
+        updatePlayPauseButtonText()
+    }
+
+    fun playNextSong() {
         when (playbackMode) {
             PlaybackMode.NORMAL -> {
                 if (currentSongIndex < songs.size - 1) {
@@ -430,7 +512,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
             PlaybackMode.SHUFFLE -> {
-                playRandomSong()
+                if (isShuffleActive && shuffleFuture.isNotEmpty()) {
+                    // If we have future songs (from going back), play next in future
+                    shuffleHistory.push(currentSongIndex)
+                    currentSongIndex = shuffleFuture.pop()
+                    playSong(songs[currentSongIndex].path)
+                } else {
+                    // Otherwise play new random song
+                    playRandomSong()
+                }
             }
             PlaybackMode.LOOP -> {
                 playSong(songs[currentSongIndex].path)
@@ -438,15 +528,62 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun playPreviousSong() {
-        if (currentSongIndex > 0) {
-            currentSongIndex--
-            playSong(songs[currentSongIndex].path)
+    fun playPreviousSong() {
+        when (playbackMode) {
+            PlaybackMode.NORMAL -> {
+                if (currentSongIndex > 0) {
+                    currentSongIndex--
+                    playSong(songs[currentSongIndex].path)
+                }
+            }
+            PlaybackMode.SHUFFLE -> {
+                if (isShuffleActive && shuffleHistory.isNotEmpty()) {
+                    // Move current song to future stack
+                    shuffleFuture.push(currentSongIndex)
+                    // Get previous song from history
+                    currentSongIndex = shuffleHistory.pop()
+                    playSong(songs[currentSongIndex].path)
+                } else if (currentSongIndex != -1) {
+                    // If no history, just replay current song
+                    playSong(songs[currentSongIndex].path)
+                }
+            }
+            PlaybackMode.LOOP -> {
+                playSong(songs[currentSongIndex].path)
+            }
         }
     }
 
     private fun playRandomSong() {
-        if (songs.isNotEmpty()) {
+        if (songs.isEmpty()) return
+
+        if (playbackMode == PlaybackMode.SHUFFLE) {
+            if (!isShuffleActive) {
+                initializeShuffleMode()
+            }
+
+            // Add current song to history before changing
+            if (currentSongIndex != -1 && isPlaying) {
+                shuffleHistory.push(currentSongIndex)
+            }
+
+            // Get next random song (not in history)
+            val availableSongs = songs.indices.toMutableList().apply {
+                removeAll(shuffleHistory) // Exclude history
+                if (currentSongIndex != -1) remove(currentSongIndex) // Exclude current
+            }
+
+            if (availableSongs.isEmpty()) {
+                // If all songs have been played, start over
+                shuffleHistory.clear()
+                currentSongIndex = songs.indices.random()
+            } else {
+                currentSongIndex = availableSongs.random()
+            }
+
+            playSong(songs[currentSongIndex].path)
+        } else {
+            // Regular random play (not shuffle mode)
             currentSongIndex = (0 until songs.size).random()
             playSong(songs[currentSongIndex].path)
         }
@@ -454,9 +591,15 @@ class MainActivity : ComponentActivity() {
 
     private fun cyclePlaybackMode() {
         playbackMode = when (playbackMode) {
-            PlaybackMode.NORMAL -> PlaybackMode.SHUFFLE
+            PlaybackMode.NORMAL -> {
+                shuffleSongs() // Initialize shuffle when first entering shuffle mode
+                PlaybackMode.SHUFFLE
+            }
             PlaybackMode.SHUFFLE -> PlaybackMode.LOOP
-            PlaybackMode.LOOP -> PlaybackMode.NORMAL
+            PlaybackMode.LOOP -> {
+                isShuffleActive = false
+                PlaybackMode.NORMAL
+            }
         }
         updateModeButtonText()
     }
@@ -474,6 +617,8 @@ class MainActivity : ComponentActivity() {
 
 
     override fun onDestroy() {
+        mediaPlayer?.release()
+        exoPlayer?.release()
         super.onDestroy()
         mediaPlayer?.release()
         handler.removeCallbacks(updateSeekBar)
@@ -553,20 +698,34 @@ class MainActivity : ComponentActivity() {
     }
 
     fun shuffleSongs() {
-        // 1. Save current song to history if playing
-        if (currentSongIndex != -1) {
-            playbackHistory.push(currentSongIndex)
-        }
+        initializeShuffleMode()
 
-        // 2. Generate new shuffle order
-        currentShuffleOrder = songs.indices.toMutableList().apply {
-            remove(currentSongIndex) // Remove current song if exists
-            shuffle()
-            if (currentSongIndex != -1) add(0, currentSongIndex) // Keep current song first
+        // Only start playing if not already playing
+        if (!isPlaying || currentSongIndex == -1) {
+            currentSongIndex = currentShuffleOrder[0]
+            playSong(songs[currentSongIndex].path)
         }
-
-        // 3. Start playback
-        currentShuffleIndex = 0
-        playSong(songs[currentShuffleOrder[0]].path)
     }
+
+    private fun initializeShuffleMode() {
+        if (songs.isEmpty()) return
+
+        // Clear history and future
+        shuffleHistory.clear()
+        shuffleFuture.clear()
+
+        // Generate new shuffle order
+        currentShuffleOrder = songs.indices.toMutableList().apply {
+            shuffle()
+        }
+
+        isShuffleActive = true
+        playbackMode = PlaybackMode.SHUFFLE
+
+        // If there's a current song, add it to history
+        if (currentSongIndex != -1) {
+            shuffleHistory.push(currentSongIndex)
+        }
+    }
+
 }
